@@ -10,12 +10,48 @@ For **every** project session, save the full conversation as a structured log. D
 - If the folder (or any parent) is a git repo, add `conversations/` to its `.gitignore`.
 - A SessionStart hook fires a reminder about this. The hook cannot determine the active subfolder — that is your responsibility based on conversation context.
 
-**What to save:**
-- User messages exactly as written
-- Your replies and the actions you took (tool calls, files written/edited, key findings)
-- Decisions, clarifications, and reasoning
+**What to save — THIS IS A TRANSCRIPT, NOT A SUMMARY:**
+
+This is not a report. This is not a summary of outcomes. Memory already does that. The conversation log exists specifically to capture what memory cannot: the actual back-and-forth, the reasoning, the failed attempts, and the previous states. If it reads like a polished document, you are doing it wrong.
+
+- **User messages quoted verbatim** — exactly as typed, not paraphrased. Use `>` blockquotes. If the user said "this @#$% API keeps timing out," log that, not "user reported API timeout issues."
+- **Your replies** — what you actually said back, not a summary of what you did. Include your reasoning, recommendations, and explanations.
+- **Tool calls and results** — what you ran, what came back, what you learned from it. Not every tool call, but the ones that shaped decisions or revealed something.
+- **Failed approaches** — what you tried that did not work and why it failed. This is one of the most valuable things to log. Memory only stores the approach that worked. Next session, the user will ask "why did we not just do X?" and the answer is in the log.
+- **Decisions and alternatives considered** — when choosing between options, log what the options were, why one was chosen, and why the others were rejected.
 - **State transitions** — whenever something changes (config, code, architecture, approach), log BOTH the before state and the after state. This is critical for rollback. If the user says "go back to how it was before," the conversation log is the only place that captures what "before" looked like. Format: `**BEFORE:** <what it was> → **AFTER:** <what it became> — **WHY:** <reason for the change>`
-- Open threads / next-time TODOs at the bottom
+- **Open threads / next-time TODOs at the bottom** — what is unfinished, what needs follow-up, what the user said they would do. Every session log must end with this section.
+
+**Example of what NOT to do (too summarized):**
+```
+Sai's request: Query New Relic for checkout errors.
+Actions taken: Ran 6 NRQL queries. Saved results.
+Key findings: Error growth of 43%.
+```
+
+**Example of what TO do (actual transcript):**
+```
+> Query New Relic for checkout and place-order errors from Feb 1 to April 10.
+> Here are the 6 queries I want you to run...
+
+Ran Q1 (transaction errors by URI). Got 12 results — top error is "Array to string
+conversion" on /order endpoint with 27,861 occurrences. This looks like a code
+regression, not an infrastructure issue.
+
+Q5 failed — Log table query timed out. The LIKE scan across 2+ months is too
+expensive. We would need to narrow the time window or use a different approach
+like querying by specific log attributes instead of free-text search.
+
+> What about the temporal-place-order service?
+
+Ran Q3 — got 0 results. The appName filter did not match. Tried alternate names
+but the service may not be reporting TransactionErrors to NR. Need to check if
+it uses Span events instead.
+
+**BEFORE:** Assumed all services report TransactionError events
+→ **AFTER:** temporal-place-order likely uses Span/Log events only
+— **WHY:** Q3 returned 0 results despite known errors in this service
+```
 
 **Frontmatter format:**
 ```markdown
