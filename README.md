@@ -21,11 +21,14 @@ Claude Conversations adds a structured logging layer to Claude Code. Every sessi
 
 ### What Gets Logged
 
-- Your messages exactly as written
-- Claude's responses and the actions it took
-- **State transitions** — every change is logged as BEFORE and AFTER with the reason, so you can always roll back
-- Decisions, reasoning, and alternatives considered
-- Open threads and TODOs
+This is a **transcript**, not a summary. Memory already stores outcomes. Conversations store everything memory cannot:
+
+- **Your messages quoted verbatim** — exactly as typed, in blockquotes
+- **Claude's actual replies** — what it said back, not a polished summary of what it did
+- **Failed approaches** — what was tried that did not work and why. Next session you will ask "why did we not just do X?" and the answer is in the log.
+- **Decisions and alternatives** — what the options were, why one was chosen, why the others were rejected
+- **State transitions** — every change logged as BEFORE and AFTER with the reason, so you can always roll back
+- **Open threads and TODOs** — every session ends with what is unfinished
 
 ### What Does Not Happen
 
