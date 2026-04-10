@@ -103,6 +103,26 @@ my-project/
 
 If the folder is a git repo, `conversations/` is automatically added to `.gitignore`.
 
+## Status Line (Optional)
+
+If you use Claude Code's [status line](https://docs.anthropic.com/en/docs/claude-code/overview), you can add a conversation freshness indicator that shows when the log was last written:
+
+```
+Session: [▓▓▓▓░░░░░░] 42% | Weekly: [▓░░░░░░░░░] 15% | Conv: 2m ago
+```
+
+This gives you at-a-glance confirmation that logging is active. If you see `Conv: --` or the time keeps growing, Claude is not writing.
+
+A snippet is included at `hooks/statusline_snippet.sh`. Add it to your existing `~/.claude/statusline-command.sh`:
+
+```bash
+# At the end of your statusline script, source the snippet:
+conv_part=$(bash ~/.claude/scripts/claude_conversations_statusline.sh)
+# Then append $conv_part to your output
+```
+
+Or copy the logic directly from the snippet into your statusline script.
+
 ## Uninstall
 
 ```bash

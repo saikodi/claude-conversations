@@ -28,9 +28,18 @@ fi
 mkdir -p "$SCRIPTS_DIR"
 
 # Copy hook script
+STATUSLINE_FILE="$(cd "$(dirname "$0")" && pwd)/hooks/statusline_snippet.sh"
+
 cp "$HOOK_FILE" "$SCRIPTS_DIR/claude_conversations_hook.sh"
 chmod +x "$SCRIPTS_DIR/claude_conversations_hook.sh"
 echo "  [OK] Hook script installed to $SCRIPTS_DIR/claude_conversations_hook.sh"
+
+# Copy statusline snippet
+if [ -f "$STATUSLINE_FILE" ]; then
+    cp "$STATUSLINE_FILE" "$SCRIPTS_DIR/claude_conversations_statusline.sh"
+    chmod +x "$SCRIPTS_DIR/claude_conversations_statusline.sh"
+    echo "  [OK] Statusline snippet installed to $SCRIPTS_DIR/claude_conversations_statusline.sh"
+fi
 
 # Add hook to settings.json
 if [ ! -f "$SETTINGS_FILE" ]; then
