@@ -46,11 +46,6 @@ chmod +x install.sh
 ./install.sh
 ```
 
-That is it. The installer:
-1. Copies the session hook to `~/.claude/scripts/`
-2. Registers it as a `SessionStart` hook in `~/.claude/settings.json`
-3. Appends conversation logging instructions to `~/.claude/CLAUDE.md`
-
 ### Windows (Git Bash)
 
 ```bash
@@ -59,33 +54,92 @@ cd claude-conversations
 bash install.sh
 ```
 
+### What the Installer Does
+
+1. Copies two hook scripts to `~/.claude/scripts/`:
+   - `claude_conversations_hook.sh` — SessionStart hook
+   - `claude_conversations_reminder.sh` — PostToolUse hook
+2. Copies the statusline snippet to `~/.claude/scripts/claude_conversations_statusline.sh`
+3. Registers both hooks in `~/.claude/settings.json`
+4. Appends conversation logging instructions to `~/.claude/CLAUDE.md`
+
+If `settings.json` already exists and `jq` is installed, the installer offers to auto-merge the hooks into your existing config (with a backup). Without `jq`, it prints the JSON you need to add manually.
+
 ## How It Works
 
-### Session Start
-
-A hook fires at the beginning of every Claude Code session, creating the `conversations/` directory and reminding Claude to log:
+Two hooks work together to ensure conversations are always logged:
 
 ```
-<your-project>/conversations/2026-04-09.md
+┌─────────────────────────────────────────────────────────┐
+│  SessionStart Hook                                      │
+│  Fires once at session start                            │
+│  → Creates conversations/ dir                           │
+│  → Reminds Claude to begin logging                      │
+└─────────────────────────────────────────────────────────┘
+                          │
+                          ▼
+┌─────────────────────────────────────────────────────────┐
+│  PostToolUse Hook (deterministic enforcement)           │
+│  Fires after every tool call                            │
+│  → Checks conversations/.last_write timestamp           │
+│  → If ≥5 min elapsed: injects reminder into context     │
+│  → Touches .last_write to reset the timer               │
+│  → Sub-10ms — direct path checks, no find/glob          │
+└─────────────────────────────────────────────────────────┘
 ```
 
-### Deterministic Reminders (PostToolUse)
+### Hook 1: SessionStart
 
-A second hook fires after every tool call. It checks a timestamp file (`conversations/.last_write`) and, if more than 5 minutes have elapsed since the last write, injects a reminder directly into Claude's context. Claude sees the reminder and writes the log.
+Fires once at the beginning of every Claude Code session. Outputs a message into Claude's context:
 
-This is deterministic because:
+```
+CONVERSATION LOGGING ACTIVE: Log this session to <working-subfolder>/conversations/2026-04-09.md
+— save to the subfolder you are actively working in. If the folder is a git repo, ensure
+conversations/ is in .gitignore.
+```
 
-- **No tool calls = no activity = nothing to log.** If Claude is idle, the hook does not fire, and there is nothing to write.
-- **Tool calls = Claude is working = the hook fires.** Every tool call checks the clock. Once the interval elapses, Claude gets the reminder on the very next tool call.
-- **No repeated nagging.** The hook touches the timestamp when it fires, so it will not remind again until the next interval.
-- **Multi-session safe.** The timestamp is per-directory (`conversations/.last_write`). Two sessions in the same project share the timestamp — the first to trigger writes, the second sees the fresh timestamp and skips.
-- **Idle-safe.** If you leave a session open for hours with no activity, no tool calls fire, no reminders trigger, no empty writes happen.
+This is the initial nudge. Claude reads this and begins logging. But instructions alone are not reliable — Claude sometimes forgets during long sessions. That is what the second hook solves.
 
-You can tune the interval:
+### Hook 2: PostToolUse (Deterministic Enforcement)
+
+The core mechanism. This hook fires after every tool call and checks a per-directory timestamp file (`conversations/.last_write`):
+
+**First tool call of the session:**
+If `.last_write` does not exist, the hook creates it silently and exits. This sets the baseline — no reminder fires on the very first tool call.
+
+**Subsequent tool calls:**
+The hook reads the modification time of `.last_write` and compares it to the current time. If the configured interval (default 300 seconds) has elapsed, it:
+
+1. Touches `.last_write` immediately (resets the timer before the reminder, preventing repeated firing)
+2. Outputs a reminder directly into Claude's context:
+
+```
+CONVERSATION LOG DUE (8m since last write): Write conversation transcript to
+./conversations/2026-04-09.md now. Append to existing content if the file exists.
+Follow the transcript format in CLAUDE.md — verbatim quotes, tool calls, failed
+approaches, state transitions. Write asynchronously (background agent or
+run_in_background). Do NOT block the user's work.
+```
+
+Claude sees this in its context and writes the log. The reminder includes specific instructions so Claude does not need to look up what to do.
+
+### Why This Is Deterministic
+
+| Property | How |
+|---|---|
+| **No tool calls = no reminder** | Hook only fires on PostToolUse. Idle sessions produce zero overhead. |
+| **Tool calls = guaranteed check** | Every tool call checks the clock. Once the interval elapses, the next tool call triggers the reminder. |
+| **No repeated nagging** | The hook touches `.last_write` before outputting the reminder. The next reminder fires only after another full interval. |
+| **Multi-session safe** | `.last_write` is per-directory. Two sessions in the same project share the timestamp — the first to trigger writes, the second sees the fresh timestamp and skips. |
+| **Sub-10ms** | One `stat` call, one integer comparison, one `touch`. No `find`, no globbing, no process spawning. |
+
+### Tuning the Interval
 
 ```bash
 export CLAUDE_CONV_INTERVAL=600  # 10 minutes instead of default 5
 ```
+
+Set this in your shell profile (`~/.bashrc`, `~/.zshrc`) so it persists across sessions.
 
 ### During the Session
 
@@ -117,9 +171,11 @@ my-project/
       2026-04-07.md
       2026-04-08.md
       2026-04-09.md
+      .last_write          ← timestamp file (not a log)
   payment-service/
     conversations/
       2026-04-09.md
+      .last_write
 ```
 
 If the folder is a git repo, `conversations/` is automatically added to `.gitignore`.
@@ -173,6 +229,9 @@ No. Logs are never preloaded. Claude reads them on demand using targeted search 
 
 **Does this work with Claude Code's built-in memory?**
 Yes. They complement each other. Memory stores curated conclusions. Conversations store the full reasoning, failed approaches, and state transitions that memory does not capture.
+
+**Why two hooks instead of just CLAUDE.md instructions?**
+CLAUDE.md instructions are probabilistic — Claude reads them at session start but can forget during long sessions. The PostToolUse hook is deterministic enforcement. It checks a timestamp on every tool call and injects a reminder directly into Claude's context when the interval elapses. Claude cannot ignore what is in its active context.
 
 **Can I share conversation logs with my team?**
 The logs are local by default. Team sharing is a future consideration that requires privacy filtering (people say things to Claude they would not say in a PR description). For now, this is a personal productivity tool.
