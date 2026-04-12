@@ -9,8 +9,10 @@ CLAUDE_DIR="$HOME/.claude"
 SETTINGS_FILE="$CLAUDE_DIR/settings.json"
 CLAUDE_MD="$CLAUDE_DIR/CLAUDE.md"
 SCRIPTS_DIR="$CLAUDE_DIR/scripts"
-SNIPPET_FILE="$(cd "$(dirname "$0")" && pwd)/claude-md-snippet.md"
-HOOK_FILE="$(cd "$(dirname "$0")" && pwd)/hooks/session_start.sh"
+REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
+SNIPPET_FILE="$REPO_DIR/claude-md-snippet.md"
+HOOK_FILE="$REPO_DIR/hooks/session_start.sh"
+STATUSLINE_FILE="$REPO_DIR/hooks/statusline_snippet.sh"
 
 echo ""
 echo "  Claude Conversations — Installer"
@@ -24,12 +26,21 @@ if [ ! -d "$CLAUDE_DIR" ]; then
     exit 1
 fi
 
+# Verify required files exist
+if [ ! -f "$HOOK_FILE" ]; then
+    echo "  ERROR: Hook file not found at $HOOK_FILE"
+    exit 1
+fi
+
+if [ ! -f "$SNIPPET_FILE" ]; then
+    echo "  ERROR: CLAUDE.md snippet not found at $SNIPPET_FILE"
+    exit 1
+fi
+
 # Create scripts directory
 mkdir -p "$SCRIPTS_DIR"
 
 # Copy hook script
-STATUSLINE_FILE="$(cd "$(dirname "$0")" && pwd)/hooks/statusline_snippet.sh"
-
 cp "$HOOK_FILE" "$SCRIPTS_DIR/claude_conversations_hook.sh"
 chmod +x "$SCRIPTS_DIR/claude_conversations_hook.sh"
 echo "  [OK] Hook script installed to $SCRIPTS_DIR/claude_conversations_hook.sh"
@@ -53,7 +64,7 @@ if [ ! -f "$SETTINGS_FILE" ]; then
         "hooks": [
           {
             "type": "command",
-            "command": "bash ~/.claude/scripts/claude_conversations_hook.sh"
+            "command": "bash $HOME/.claude/scripts/claude_conversations_hook.sh"
           }
         ]
       }
@@ -61,6 +72,13 @@ if [ ! -f "$SETTINGS_FILE" ]; then
   }
 }
 SETTINGS
+
+    # Validate the created JSON (only if jq is available)
+    if command -v jq &>/dev/null && ! jq empty "$SETTINGS_FILE" 2>/dev/null; then
+        echo "  ERROR: Failed to create valid settings.json"
+        rm "$SETTINGS_FILE"
+        exit 1
+    fi
     echo "  [OK] Created $SETTINGS_FILE with SessionStart hook"
 else
     # Check if hook already exists
@@ -68,34 +86,77 @@ else
         echo "  [OK] Hook already registered in settings.json (skipped)"
     else
         echo ""
-        echo "  MANUAL STEP REQUIRED:"
-        echo "  Your settings.json already exists. Add this hook to your SessionStart hooks:"
-        echo ""
-        echo '  {'
-        echo '    "type": "command",'
-        echo '    "command": "bash ~/.claude/scripts/claude_conversations_hook.sh"'
-        echo '  }'
-        echo ""
-        echo "  File: $SETTINGS_FILE"
+        echo "  Your settings.json already exists."
         echo ""
 
-        # Attempt auto-merge if jq is available
+        MERGED=0
         if command -v jq &> /dev/null; then
+            echo "  Automatic merge is available."
             read -p "  Attempt automatic merge? (y/n) " -n 1 -r
             echo ""
             if [[ $REPLY =~ ^[Yy]$ ]]; then
-                HOOK_ENTRY='{"type":"command","command":"bash ~/.claude/scripts/claude_conversations_hook.sh"}'
+                # Create backup before modification
+                cp "$SETTINGS_FILE" "${SETTINGS_FILE}.backup"
+                echo "  [OK] Backup created at ${SETTINGS_FILE}.backup"
 
+                HOOK_ENTRY='{"type":"command","command":"bash $HOME/.claude/scripts/claude_conversations_hook.sh"}'
+
+                # Check if hooks object exists
+                if ! jq -e '.hooks' "$SETTINGS_FILE" > /dev/null 2>&1; then
+                    jq --argjson hook "$HOOK_ENTRY" '.hooks = {SessionStart: [{matcher:"", hooks: [$hook]}]}' "$SETTINGS_FILE" > "${SETTINGS_FILE}.tmp"
                 # Check if SessionStart exists
-                if jq -e '.hooks.SessionStart' "$SETTINGS_FILE" > /dev/null 2>&1; then
+                elif jq -e '.hooks.SessionStart' "$SETTINGS_FILE" > /dev/null 2>&1; then
                     # Append to existing SessionStart hooks
-                    jq --argjson hook "$HOOK_ENTRY" '.hooks.SessionStart[0].hooks += [$hook]' "$SETTINGS_FILE" > "${SETTINGS_FILE}.tmp" && mv "${SETTINGS_FILE}.tmp" "$SETTINGS_FILE"
+                    jq --argjson hook "$HOOK_ENTRY" '.hooks.SessionStart[0].hooks += [$hook]' "$SETTINGS_FILE" > "${SETTINGS_FILE}.tmp"
                 else
                     # Create SessionStart section
-                    jq --argjson hook "$HOOK_ENTRY" '.hooks.SessionStart = [{"matcher":"","hooks":[$hook]}]' "$SETTINGS_FILE" > "${SETTINGS_FILE}.tmp" && mv "${SETTINGS_FILE}.tmp" "$SETTINGS_FILE"
+                    jq --argjson hook "$HOOK_ENTRY" '.hooks.SessionStart = [{matcher:"", hooks: [$hook]}]' "$SETTINGS_FILE" > "${SETTINGS_FILE}.tmp"
                 fi
-                echo "  [OK] Hook auto-merged into settings.json"
+
+                # Validate the modified JSON before replacing
+                if jq empty "${SETTINGS_FILE}.tmp" 2>/dev/null; then
+                    mv "${SETTINGS_FILE}.tmp" "$SETTINGS_FILE"
+                    echo "  [OK] Hook merged into settings.json"
+                    MERGED=1
+                else
+                    rm "${SETTINGS_FILE}.tmp"
+                    echo "  ERROR: Merge produced invalid JSON. Original saved to ${SETTINGS_FILE}.backup"
+                    exit 1
+                fi
             fi
+        else
+            echo "  jq is not installed — automatic merge unavailable."
+        fi
+
+        if [ "$MERGED" -eq 0 ]; then
+            echo ""
+            echo "  OPTION 2: Manual merge"
+            echo "  ======================"
+            echo "  Add this entry to the hooks.SessionStart array in $SETTINGS_FILE:"
+            echo ""
+            echo '  {'
+            echo '    "type": "command",'
+            echo '    "command": "bash $HOME/.claude/scripts/claude_conversations_hook.sh"'
+            echo '  }'
+            echo ""
+            echo "  Example structure (if you don't have SessionStart yet):"
+            echo ""
+            echo '  {'
+            echo '    "hooks": {'
+            echo '      "SessionStart": ['
+            echo '        {'
+            echo '          "matcher": "",'
+            echo '          "hooks": ['
+            echo '            {'
+            echo '              "type": "command",'
+            echo '              "command": "bash $HOME/.claude/scripts/claude_conversations_hook.sh"'
+            echo '            }'
+            echo '          ]'
+            echo '        }'
+            echo '      ]'
+            echo '    }'
+            echo '  }'
+            echo ""
         fi
     fi
 fi
