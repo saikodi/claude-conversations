@@ -63,10 +63,28 @@ bash install.sh
 
 ### Session Start
 
-A hook fires at the beginning of every Claude Code session, reminding Claude to log the conversation to your active working directory:
+A hook fires at the beginning of every Claude Code session, creating the `conversations/` directory and reminding Claude to log:
 
 ```
 <your-project>/conversations/2026-04-09.md
+```
+
+### Deterministic Reminders (PostToolUse)
+
+A second hook fires after every tool call. It checks a timestamp file (`conversations/.last_write`) and, if more than 5 minutes have elapsed since the last write, injects a reminder directly into Claude's context. Claude sees the reminder and writes the log.
+
+This is deterministic because:
+
+- **No tool calls = no activity = nothing to log.** If Claude is idle, the hook does not fire, and there is nothing to write.
+- **Tool calls = Claude is working = the hook fires.** Every tool call checks the clock. Once the interval elapses, Claude gets the reminder on the very next tool call.
+- **No repeated nagging.** The hook touches the timestamp when it fires, so it will not remind again until the next interval.
+- **Multi-session safe.** The timestamp is per-directory (`conversations/.last_write`). Two sessions in the same project share the timestamp — the first to trigger writes, the second sees the fresh timestamp and skips.
+- **Idle-safe.** If you leave a session open for hours with no activity, no tool calls fire, no reminders trigger, no empty writes happen.
+
+You can tune the interval:
+
+```bash
+export CLAUDE_CONV_INTERVAL=600  # 10 minutes instead of default 5
 ```
 
 ### During the Session
@@ -108,13 +126,19 @@ If the folder is a git repo, `conversations/` is automatically added to `.gitign
 
 ## Status Line (Optional)
 
-If you use Claude Code's [status line](https://docs.anthropic.com/en/docs/claude-code/overview), you can add a conversation freshness indicator that shows when the log was last written:
+If you use Claude Code's [status line](https://docs.anthropic.com/en/docs/claude-code/overview), you can add a conversation freshness indicator:
 
 ```
 Session: [▓▓▓▓░░░░░░] 42% | Weekly: [▓░░░░░░░░░] 15% | Conv: 2m ago
 ```
 
-This gives you at-a-glance confirmation that logging is active. If you see `Conv: --` or the time keeps growing, Claude is not writing.
+The indicator shows three states:
+
+| Status | Meaning |
+|--------|---------|
+| `Conv: 2m ago` | Log was written 2 minutes ago. All good. |
+| `Conv: DUE` | Interval exceeded. Claude should be writing on the next tool call. |
+| `Conv: --` | No conversation log exists for today yet. |
 
 A snippet is included at `hooks/statusline_snippet.sh`. Add it to your existing `~/.claude/statusline-command.sh`:
 
