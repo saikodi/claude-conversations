@@ -13,7 +13,9 @@ REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
 SNIPPET_FILE="$REPO_DIR/claude-md-snippet.md"
 HOOK_FILE="$REPO_DIR/hooks/session_start.sh"
 POST_TOOL_HOOK="$REPO_DIR/hooks/post_tool_reminder.sh"
+SESSION_END_HOOK="$REPO_DIR/hooks/session_end.sh"
 STATUSLINE_FILE="$REPO_DIR/hooks/statusline_snippet.sh"
+TIMESTAMP_DIR="$CLAUDE_DIR/conversation_timestamps"
 
 echo ""
 echo "  Claude Conversations — Installer"
@@ -50,6 +52,14 @@ cp "$POST_TOOL_HOOK" "$SCRIPTS_DIR/claude_conversations_reminder.sh"
 chmod +x "$SCRIPTS_DIR/claude_conversations_reminder.sh"
 echo "  [OK] PostToolUse hook installed to $SCRIPTS_DIR/claude_conversations_reminder.sh"
 
+cp "$SESSION_END_HOOK" "$SCRIPTS_DIR/claude_conversations_session_end.sh"
+chmod +x "$SCRIPTS_DIR/claude_conversations_session_end.sh"
+echo "  [OK] SessionEnd hook installed to $SCRIPTS_DIR/claude_conversations_session_end.sh"
+
+# Create timestamp directory
+mkdir -p "$TIMESTAMP_DIR"
+echo "  [OK] Timestamp directory created at $TIMESTAMP_DIR"
+
 # Copy statusline snippet
 if [ -f "$STATUSLINE_FILE" ]; then
     cp "$STATUSLINE_FILE" "$SCRIPTS_DIR/claude_conversations_statusline.sh"
@@ -84,6 +94,17 @@ if [ ! -f "$SETTINGS_FILE" ]; then
           }
         ]
       }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash $HOME/.claude/scripts/claude_conversations_session_end.sh"
+          }
+        ]
+      }
     ]
   }
 }
@@ -100,6 +121,7 @@ else
     # Check if hooks already exist
     SESSION_HOOK_EXISTS=false
     POST_TOOL_HOOK_EXISTS=false
+    SESSION_END_HOOK_EXISTS=false
     if grep -q "claude_conversations_hook" "$SETTINGS_FILE" 2>/dev/null; then
         SESSION_HOOK_EXISTS=true
         echo "  [OK] SessionStart hook already registered (skipped)"
@@ -108,10 +130,15 @@ else
         POST_TOOL_HOOK_EXISTS=true
         echo "  [OK] PostToolUse hook already registered (skipped)"
     fi
+    if grep -q "claude_conversations_session_end" "$SETTINGS_FILE" 2>/dev/null; then
+        SESSION_END_HOOK_EXISTS=true
+        echo "  [OK] SessionEnd hook already registered (skipped)"
+    fi
 
-    if [ "$SESSION_HOOK_EXISTS" = false ] || [ "$POST_TOOL_HOOK_EXISTS" = false ]; then
+    if [ "$SESSION_HOOK_EXISTS" = false ] || [ "$POST_TOOL_HOOK_EXISTS" = false ] || [ "$SESSION_END_HOOK_EXISTS" = false ]; then
         SESSION_ENTRY='{"type":"command","command":"bash $HOME/.claude/scripts/claude_conversations_hook.sh"}'
         POST_TOOL_ENTRY='{"type":"command","command":"bash $HOME/.claude/scripts/claude_conversations_reminder.sh"}'
+        SESSION_END_ENTRY='{"type":"command","command":"bash $HOME/.claude/scripts/claude_conversations_session_end.sh"}'
 
         MERGED=0
         if command -v jq &> /dev/null; then
@@ -163,6 +190,25 @@ else
                         exit 1
                     fi
                 fi
+
+                if [ "$SESSION_END_HOOK_EXISTS" = false ]; then
+                    if jq -e '.hooks.SessionEnd' "$SETTINGS_FILE" > /dev/null 2>&1; then
+                        jq --argjson hook "$SESSION_END_ENTRY" '.hooks.SessionEnd[0].hooks += [$hook]' "$SETTINGS_FILE" > "${SETTINGS_FILE}.tmp"
+                    else
+                        jq --argjson hook "$SESSION_END_ENTRY" '.hooks.SessionEnd = [{matcher:"", hooks: [$hook]}]' "$SETTINGS_FILE" > "${SETTINGS_FILE}.tmp"
+                    fi
+
+                    # Validate before replacing
+                    if jq empty "${SETTINGS_FILE}.tmp" 2>/dev/null; then
+                        mv "${SETTINGS_FILE}.tmp" "$SETTINGS_FILE"
+                        echo "  [OK] SessionEnd hook auto-merged"
+                        MERGED=1
+                    else
+                        rm "${SETTINGS_FILE}.tmp"
+                        echo "  ERROR: Merge produced invalid JSON. Original saved to ${SETTINGS_FILE}.backup"
+                        exit 1
+                    fi
+                fi
             fi
         else
             echo "  jq is not installed — automatic merge unavailable."
@@ -183,12 +229,18 @@ else
                 echo "  $POST_TOOL_ENTRY"
                 echo ""
             fi
+            if [ "$SESSION_END_HOOK_EXISTS" = false ]; then
+                echo "  SessionEnd hook:"
+                echo "  $SESSION_END_ENTRY"
+                echo ""
+            fi
             echo "  Example structure (if you don't have hooks yet):"
             echo ""
             echo '  {'
             echo '    "hooks": {'
             echo '      "SessionStart": [{"matcher":"","hooks":[<session hook>]}],'
-            echo '      "PostToolUse": [{"matcher":"","hooks":[<posttool hook>]}]'
+            echo '      "PostToolUse": [{"matcher":"","hooks":[<posttool hook>]}],'
+            echo '      "SessionEnd": [{"matcher":"","hooks":[<session end hook>]}]'
             echo '    }'
             echo '  }'
             echo ""

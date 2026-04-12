@@ -56,24 +56,26 @@ bash install.sh
 
 ### What the Installer Does
 
-1. Copies two hook scripts to `~/.claude/scripts/`:
+1. Copies three hook scripts to `~/.claude/scripts/`:
    - `claude_conversations_hook.sh` — SessionStart hook
    - `claude_conversations_reminder.sh` — PostToolUse hook
+   - `claude_conversations_session_end.sh` — SessionEnd hook
 2. Copies the statusline snippet to `~/.claude/scripts/claude_conversations_statusline.sh`
-3. Registers both hooks in `~/.claude/settings.json`
-4. Appends conversation logging instructions to `~/.claude/CLAUDE.md`
+3. Creates `~/.claude/conversation_timestamps/` for per-session timestamp files
+4. Registers all three hooks in `~/.claude/settings.json`
+5. Appends conversation logging instructions to `~/.claude/CLAUDE.md`
 
 If `settings.json` already exists and `jq` is installed, the installer offers to auto-merge the hooks into your existing config (with a backup). Without `jq`, it prints the JSON you need to add manually.
 
 ## How It Works
 
-Two hooks work together to ensure conversations are always logged:
+Three hooks work together to ensure conversations are always logged:
 
 ```
 ┌─────────────────────────────────────────────────────────┐
 │  SessionStart Hook                                      │
 │  Fires once at session start                            │
-│  → Creates conversations/ dir                           │
+│  → Creates per-session timestamp baseline                │
 │  → Reminds Claude to begin logging                      │
 └─────────────────────────────────────────────────────────┘
                           │
@@ -81,16 +83,31 @@ Two hooks work together to ensure conversations are always logged:
 ┌─────────────────────────────────────────────────────────┐
 │  PostToolUse Hook (deterministic enforcement)           │
 │  Fires after every tool call                            │
-│  → Checks conversations/.last_write timestamp           │
+│  → Checks per-session timestamp in                      │
+│    ~/.claude/conversation_timestamps/                    │
 │  → If ≥5 min elapsed: injects reminder into context     │
-│  → Touches .last_write to reset the timer               │
+│  → Touches timestamp to reset the timer                 │
 │  → Sub-10ms — direct path checks, no find/glob          │
+└─────────────────────────────────────────────────────────┘
+                          │
+                          ▼
+┌─────────────────────────────────────────────────────────┐
+│  SessionEnd Hook                                        │
+│  Fires when session terminates                          │
+│  → Deletes per-session timestamp file                   │
+│  → Zero accumulation of stale files                     │
 └─────────────────────────────────────────────────────────┘
 ```
 
+### Key Design: Decoupled Timing and Location
+
+Timestamp files live in `~/.claude/conversation_timestamps/`, keyed by session PID. Conversation logs live in `<working-dir>/conversations/`. This decouples **when to remind** (managed by hooks) from **where to write** (decided by Claude from conversation context).
+
+Why this matters: if Claude Code is launched from a parent directory but the actual work happens in a subdirectory, a directory-relative timestamp would track the wrong location. Per-session timestamps in a fixed directory avoid this entirely.
+
 ### Hook 1: SessionStart
 
-Fires once at the beginning of every Claude Code session. Outputs a message into Claude's context:
+Fires once at the beginning of every Claude Code session. Creates the per-session timestamp baseline and outputs a message into Claude's context:
 
 ```
 CONVERSATION LOGGING ACTIVE: Log this session to <working-subfolder>/conversations/2026-04-09.md
@@ -98,19 +115,19 @@ CONVERSATION LOGGING ACTIVE: Log this session to <working-subfolder>/conversatio
 conversations/ is in .gitignore.
 ```
 
-This is the initial nudge. Claude reads this and begins logging. But instructions alone are not reliable — Claude sometimes forgets during long sessions. That is what the second hook solves.
+This is the initial nudge. Claude reads this and begins logging. But instructions alone are not reliable — Claude sometimes forgets during long sessions. That is what the PostToolUse hook solves.
 
 ### Hook 2: PostToolUse (Deterministic Enforcement)
 
-The core mechanism. This hook fires after every tool call and checks a per-directory timestamp file (`conversations/.last_write`):
+The core mechanism. This hook fires after every tool call and checks a per-session timestamp file (`~/.claude/conversation_timestamps/.conv_last_write_<PID>`):
 
 **First tool call of the session:**
-If `.last_write` does not exist, the hook creates it silently and exits. This sets the baseline — no reminder fires on the very first tool call.
+If the timestamp file does not exist, the hook creates it silently and exits. This sets the baseline — no reminder fires on the very first tool call.
 
 **Subsequent tool calls:**
-The hook reads the modification time of `.last_write` and compares it to the current time. If the configured interval (default 300 seconds) has elapsed, it:
+The hook reads the modification time of the timestamp file and compares it to the current time. If the configured interval (default 300 seconds) has elapsed, it:
 
-1. Touches `.last_write` immediately (resets the timer before the reminder, preventing repeated firing)
+1. Touches the timestamp file immediately (resets the timer before the reminder, preventing repeated firing)
 2. Outputs a reminder directly into Claude's context:
 
 ```
@@ -123,14 +140,19 @@ run_in_background). Do NOT block the user's work.
 
 Claude sees this in its context and writes the log. The reminder includes specific instructions so Claude does not need to look up what to do.
 
+### Hook 3: SessionEnd (Cleanup)
+
+Fires when the session terminates. Deletes the per-session timestamp file (`~/.claude/conversation_timestamps/.conv_last_write_<PID>`). This ensures zero accumulation of stale files — no cleanup logic needed.
+
 ### Why This Is Deterministic
 
 | Property | How |
 |---|---|
 | **No tool calls = no reminder** | Hook only fires on PostToolUse. Idle sessions produce zero overhead. |
 | **Tool calls = guaranteed check** | Every tool call checks the clock. Once the interval elapses, the next tool call triggers the reminder. |
-| **No repeated nagging** | The hook touches `.last_write` before outputting the reminder. The next reminder fires only after another full interval. |
-| **Multi-session safe** | `.last_write` is per-directory. Two sessions in the same project share the timestamp — the first to trigger writes, the second sees the fresh timestamp and skips. |
+| **No repeated nagging** | The hook touches the timestamp before outputting the reminder. The next reminder fires only after another full interval. |
+| **Per-session isolation** | Each session has its own timestamp file keyed by PID. Session A writing does not reset Session B's timer. |
+| **No stale files** | SessionEnd hook deletes the timestamp file when the session terminates. |
 | **Sub-10ms** | One `stat` call, one integer comparison, one `touch`. No `find`, no globbing, no process spawning. |
 
 ### Tuning the Interval
@@ -171,11 +193,9 @@ my-project/
       2026-04-07.md
       2026-04-08.md
       2026-04-09.md
-      .last_write          ← timestamp file (not a log)
   payment-service/
     conversations/
       2026-04-09.md
-      .last_write
 ```
 
 If the folder is a git repo, `conversations/` is automatically added to `.gitignore`.
