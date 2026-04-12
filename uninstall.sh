@@ -2,7 +2,7 @@
 set -e
 
 # Claude Conversations — Uninstaller
-# Removes the hook and CLAUDE.md instructions. Does NOT delete existing conversation logs.
+# Removes the hooks and scripts. Does NOT delete existing conversation logs.
 
 CLAUDE_DIR="$HOME/.claude"
 SCRIPTS_DIR="$CLAUDE_DIR/scripts"
@@ -14,37 +14,31 @@ echo "  Claude Conversations — Uninstaller"
 echo "  ===================================="
 echo ""
 
-# Remove hook script
-if [ -f "$SCRIPTS_DIR/claude_conversations_hook.sh" ]; then
-    rm "$SCRIPTS_DIR/claude_conversations_hook.sh"
-    echo "  [OK] Removed hook script"
-else
-    echo "  [--] Hook script not found (already removed?)"
-fi
-
-# Remove statusline script if it exists
-if [ -f "$SCRIPTS_DIR/claude_conversations_statusline.sh" ]; then
-    rm "$SCRIPTS_DIR/claude_conversations_statusline.sh"
-    echo "  [OK] Removed statusline script"
-fi
+# Remove hook scripts
+for script in claude_conversations_hook.sh claude_conversations_reminder.sh claude_conversations_statusline.sh; do
+    if [ -f "$SCRIPTS_DIR/$script" ]; then
+        rm "$SCRIPTS_DIR/$script"
+        echo "  [OK] Removed $script"
+    else
+        echo "  [--] $script not found (already removed?)"
+    fi
+done
 
 echo ""
 echo "  MANUAL STEPS:"
 echo ""
 echo "  1. Remove from settings.json:"
 echo "     File: $SETTINGS_FILE"
-echo "     Remove this entry from hooks.SessionStart array:"
-echo ""
-echo '     {'
-echo '       "type": "command",'
-echo '       "command": "bash $HOME/.claude/scripts/claude_conversations_hook.sh"'
-echo '     }'
+echo "     Remove the claude_conversations_hook entry from hooks.SessionStart"
+echo "     Remove the claude_conversations_reminder entry from hooks.PostToolUse"
 echo ""
 echo "  2. Remove from CLAUDE.md:"
 echo "     File: $CLAUDE_MD"
 echo "     Remove the entire 'Conversation Logging' section"
 echo ""
-echo "  3. Your existing conversation logs in */conversations/ are NOT deleted"
+echo "  3. Remove the Conv: section from ~/.claude/statusline-command.sh (if added)"
+echo ""
+echo "  4. Your existing conversation logs in */conversations/ are NOT deleted"
 echo ""
 echo "  If you need to restore settings.json from a backup:"
 echo "  Look for settings.json.backup in $CLAUDE_DIR"

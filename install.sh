@@ -12,6 +12,7 @@ SCRIPTS_DIR="$CLAUDE_DIR/scripts"
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
 SNIPPET_FILE="$REPO_DIR/claude-md-snippet.md"
 HOOK_FILE="$REPO_DIR/hooks/session_start.sh"
+POST_TOOL_HOOK="$REPO_DIR/hooks/post_tool_reminder.sh"
 STATUSLINE_FILE="$REPO_DIR/hooks/statusline_snippet.sh"
 
 echo ""
@@ -40,10 +41,14 @@ fi
 # Create scripts directory
 mkdir -p "$SCRIPTS_DIR"
 
-# Copy hook script
+# Copy hook scripts
 cp "$HOOK_FILE" "$SCRIPTS_DIR/claude_conversations_hook.sh"
 chmod +x "$SCRIPTS_DIR/claude_conversations_hook.sh"
-echo "  [OK] Hook script installed to $SCRIPTS_DIR/claude_conversations_hook.sh"
+echo "  [OK] SessionStart hook installed to $SCRIPTS_DIR/claude_conversations_hook.sh"
+
+cp "$POST_TOOL_HOOK" "$SCRIPTS_DIR/claude_conversations_reminder.sh"
+chmod +x "$SCRIPTS_DIR/claude_conversations_reminder.sh"
+echo "  [OK] PostToolUse hook installed to $SCRIPTS_DIR/claude_conversations_reminder.sh"
 
 # Copy statusline snippet
 if [ -f "$STATUSLINE_FILE" ]; then
@@ -52,9 +57,9 @@ if [ -f "$STATUSLINE_FILE" ]; then
     echo "  [OK] Statusline snippet installed to $SCRIPTS_DIR/claude_conversations_statusline.sh"
 fi
 
-# Add hook to settings.json
+# Add hooks to settings.json
 if [ ! -f "$SETTINGS_FILE" ]; then
-    # Create settings.json with the hook
+    # Create settings.json with both hooks
     cat > "$SETTINGS_FILE" << 'SETTINGS'
 {
   "hooks": {
@@ -65,6 +70,17 @@ if [ ! -f "$SETTINGS_FILE" ]; then
           {
             "type": "command",
             "command": "bash $HOME/.claude/scripts/claude_conversations_hook.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash $HOME/.claude/scripts/claude_conversations_reminder.sh"
           }
         ]
       }
@@ -79,49 +95,73 @@ SETTINGS
         rm "$SETTINGS_FILE"
         exit 1
     fi
-    echo "  [OK] Created $SETTINGS_FILE with SessionStart hook"
+    echo "  [OK] Created $SETTINGS_FILE with SessionStart + PostToolUse hooks"
 else
-    # Check if hook already exists
+    # Check if hooks already exist
+    SESSION_HOOK_EXISTS=false
+    POST_TOOL_HOOK_EXISTS=false
     if grep -q "claude_conversations_hook" "$SETTINGS_FILE" 2>/dev/null; then
-        echo "  [OK] Hook already registered in settings.json (skipped)"
-    else
-        echo ""
-        echo "  Your settings.json already exists."
-        echo ""
+        SESSION_HOOK_EXISTS=true
+        echo "  [OK] SessionStart hook already registered (skipped)"
+    fi
+    if grep -q "claude_conversations_reminder" "$SETTINGS_FILE" 2>/dev/null; then
+        POST_TOOL_HOOK_EXISTS=true
+        echo "  [OK] PostToolUse hook already registered (skipped)"
+    fi
+
+    if [ "$SESSION_HOOK_EXISTS" = false ] || [ "$POST_TOOL_HOOK_EXISTS" = false ]; then
+        SESSION_ENTRY='{"type":"command","command":"bash $HOME/.claude/scripts/claude_conversations_hook.sh"}'
+        POST_TOOL_ENTRY='{"type":"command","command":"bash $HOME/.claude/scripts/claude_conversations_reminder.sh"}'
 
         MERGED=0
         if command -v jq &> /dev/null; then
             echo "  Automatic merge is available."
-            read -p "  Attempt automatic merge? (y/n) " -n 1 -r
+            read -p "  Auto-merge hooks into settings.json? (y/n) " -n 1 -r
             echo ""
             if [[ $REPLY =~ ^[Yy]$ ]]; then
                 # Create backup before modification
                 cp "$SETTINGS_FILE" "${SETTINGS_FILE}.backup"
                 echo "  [OK] Backup created at ${SETTINGS_FILE}.backup"
 
-                HOOK_ENTRY='{"type":"command","command":"bash $HOME/.claude/scripts/claude_conversations_hook.sh"}'
+                if [ "$SESSION_HOOK_EXISTS" = false ]; then
+                    # Check if hooks object exists
+                    if ! jq -e '.hooks' "$SETTINGS_FILE" > /dev/null 2>&1; then
+                        jq --argjson hook "$SESSION_ENTRY" '.hooks = {SessionStart: [{matcher:"", hooks: [$hook]}]}' "$SETTINGS_FILE" > "${SETTINGS_FILE}.tmp"
+                    elif jq -e '.hooks.SessionStart' "$SETTINGS_FILE" > /dev/null 2>&1; then
+                        jq --argjson hook "$SESSION_ENTRY" '.hooks.SessionStart[0].hooks += [$hook]' "$SETTINGS_FILE" > "${SETTINGS_FILE}.tmp"
+                    else
+                        jq --argjson hook "$SESSION_ENTRY" '.hooks.SessionStart = [{matcher:"", hooks: [$hook]}]' "$SETTINGS_FILE" > "${SETTINGS_FILE}.tmp"
+                    fi
 
-                # Check if hooks object exists
-                if ! jq -e '.hooks' "$SETTINGS_FILE" > /dev/null 2>&1; then
-                    jq --argjson hook "$HOOK_ENTRY" '.hooks = {SessionStart: [{matcher:"", hooks: [$hook]}]}' "$SETTINGS_FILE" > "${SETTINGS_FILE}.tmp"
-                # Check if SessionStart exists
-                elif jq -e '.hooks.SessionStart' "$SETTINGS_FILE" > /dev/null 2>&1; then
-                    # Append to existing SessionStart hooks
-                    jq --argjson hook "$HOOK_ENTRY" '.hooks.SessionStart[0].hooks += [$hook]' "$SETTINGS_FILE" > "${SETTINGS_FILE}.tmp"
-                else
-                    # Create SessionStart section
-                    jq --argjson hook "$HOOK_ENTRY" '.hooks.SessionStart = [{matcher:"", hooks: [$hook]}]' "$SETTINGS_FILE" > "${SETTINGS_FILE}.tmp"
+                    # Validate before replacing
+                    if jq empty "${SETTINGS_FILE}.tmp" 2>/dev/null; then
+                        mv "${SETTINGS_FILE}.tmp" "$SETTINGS_FILE"
+                        echo "  [OK] SessionStart hook auto-merged"
+                        MERGED=1
+                    else
+                        rm "${SETTINGS_FILE}.tmp"
+                        echo "  ERROR: Merge produced invalid JSON. Original saved to ${SETTINGS_FILE}.backup"
+                        exit 1
+                    fi
                 fi
 
-                # Validate the modified JSON before replacing
-                if jq empty "${SETTINGS_FILE}.tmp" 2>/dev/null; then
-                    mv "${SETTINGS_FILE}.tmp" "$SETTINGS_FILE"
-                    echo "  [OK] Hook merged into settings.json"
-                    MERGED=1
-                else
-                    rm "${SETTINGS_FILE}.tmp"
-                    echo "  ERROR: Merge produced invalid JSON. Original saved to ${SETTINGS_FILE}.backup"
-                    exit 1
+                if [ "$POST_TOOL_HOOK_EXISTS" = false ]; then
+                    if jq -e '.hooks.PostToolUse' "$SETTINGS_FILE" > /dev/null 2>&1; then
+                        jq --argjson hook "$POST_TOOL_ENTRY" '.hooks.PostToolUse[0].hooks += [$hook]' "$SETTINGS_FILE" > "${SETTINGS_FILE}.tmp"
+                    else
+                        jq --argjson hook "$POST_TOOL_ENTRY" '.hooks.PostToolUse = [{matcher:"", hooks: [$hook]}]' "$SETTINGS_FILE" > "${SETTINGS_FILE}.tmp"
+                    fi
+
+                    # Validate before replacing
+                    if jq empty "${SETTINGS_FILE}.tmp" 2>/dev/null; then
+                        mv "${SETTINGS_FILE}.tmp" "$SETTINGS_FILE"
+                        echo "  [OK] PostToolUse hook auto-merged"
+                        MERGED=1
+                    else
+                        rm "${SETTINGS_FILE}.tmp"
+                        echo "  ERROR: Merge produced invalid JSON. Original saved to ${SETTINGS_FILE}.backup"
+                        exit 1
+                    fi
                 fi
             fi
         else
@@ -130,30 +170,25 @@ else
 
         if [ "$MERGED" -eq 0 ]; then
             echo ""
-            echo "  OPTION 2: Manual merge"
-            echo "  ======================"
-            echo "  Add this entry to the hooks.SessionStart array in $SETTINGS_FILE:"
+            echo "  MANUAL STEP REQUIRED:"
+            echo "  Add these hooks to your settings.json ($SETTINGS_FILE):"
             echo ""
-            echo '  {'
-            echo '    "type": "command",'
-            echo '    "command": "bash $HOME/.claude/scripts/claude_conversations_hook.sh"'
-            echo '  }'
-            echo ""
-            echo "  Example structure (if you don't have SessionStart yet):"
+            if [ "$SESSION_HOOK_EXISTS" = false ]; then
+                echo "  SessionStart hook:"
+                echo "  $SESSION_ENTRY"
+                echo ""
+            fi
+            if [ "$POST_TOOL_HOOK_EXISTS" = false ]; then
+                echo "  PostToolUse hook:"
+                echo "  $POST_TOOL_ENTRY"
+                echo ""
+            fi
+            echo "  Example structure (if you don't have hooks yet):"
             echo ""
             echo '  {'
             echo '    "hooks": {'
-            echo '      "SessionStart": ['
-            echo '        {'
-            echo '          "matcher": "",'
-            echo '          "hooks": ['
-            echo '            {'
-            echo '              "type": "command",'
-            echo '              "command": "bash $HOME/.claude/scripts/claude_conversations_hook.sh"'
-            echo '            }'
-            echo '          ]'
-            echo '        }'
-            echo '      ]'
+            echo '      "SessionStart": [{"matcher":"","hooks":[<session hook>]}],'
+            echo '      "PostToolUse": [{"matcher":"","hooks":[<posttool hook>]}]'
             echo '    }'
             echo '  }'
             echo ""
