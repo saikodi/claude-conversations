@@ -15,7 +15,7 @@ echo "  ===================================="
 echo ""
 
 # Remove hook scripts
-for script in claude_conversations_hook.sh claude_conversations_reminder.sh claude_conversations_statusline.sh; do
+for script in claude_conversations_hook.sh claude_conversations_reminder.sh claude_conversations_session_end.sh claude_conversations_statusline.sh; do
     if [ -f "$SCRIPTS_DIR/$script" ]; then
         rm "$SCRIPTS_DIR/$script"
         echo "  [OK] Removed $script"
@@ -24,6 +24,15 @@ for script in claude_conversations_hook.sh claude_conversations_reminder.sh clau
     fi
 done
 
+# Remove timestamp directory
+TIMESTAMP_DIR="$CLAUDE_DIR/conversation_timestamps"
+if [ -d "$TIMESTAMP_DIR" ]; then
+    rm -rf "$TIMESTAMP_DIR"
+    echo "  [OK] Removed timestamp directory $TIMESTAMP_DIR"
+else
+    echo "  [--] Timestamp directory not found (already removed?)"
+fi
+
 echo ""
 echo "  MANUAL STEPS:"
 echo ""
@@ -31,6 +40,7 @@ echo "  1. Remove from settings.json:"
 echo "     File: $SETTINGS_FILE"
 echo "     Remove the claude_conversations_hook entry from hooks.SessionStart"
 echo "     Remove the claude_conversations_reminder entry from hooks.PostToolUse"
+echo "     Remove the claude_conversations_session_end entry from hooks.SessionEnd"
 echo ""
 echo "  2. Remove from CLAUDE.md:"
 echo "     File: $CLAUDE_MD"
