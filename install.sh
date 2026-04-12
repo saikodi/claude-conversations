@@ -73,8 +73,8 @@ if [ ! -f "$SETTINGS_FILE" ]; then
 }
 SETTINGS
 
-    # Validate the created JSON
-    if ! jq empty "$SETTINGS_FILE" 2>/dev/null; then
+    # Validate the created JSON (only if jq is available)
+    if command -v jq &>/dev/null && ! jq empty "$SETTINGS_FILE" 2>/dev/null; then
         echo "  ERROR: Failed to create valid settings.json"
         rm "$SETTINGS_FILE"
         exit 1
