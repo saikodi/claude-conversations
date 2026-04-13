@@ -3,15 +3,20 @@
 # Fires after every tool call. Checks if conversation log is overdue and reminds Claude to write it.
 # The reminder goes into Claude's context so it acts on it — this is the deterministic enforcement mechanism.
 #
-# Timestamp files live in ~/.claude/conversation_timestamps/ (per-session, keyed by PPID).
-# This decouples "when to remind" from "where to write" — the hook manages timing,
-# Claude decides the target directory from conversation context.
+# Reads session_id from stdin JSON (passed by Claude Code) for per-session timestamp isolation.
+# Timestamp files live in ~/.claude/conversation_timestamps/ keyed by session_id.
+
+# Read stdin JSON and extract session_id
+INPUT=$(cat)
+SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)
+[ -z "$SESSION_ID" ] && SESSION_ID=$(echo "$INPUT" | python -c "import sys,json; print(json.load(sys.stdin).get('session_id',''))" 2>/dev/null)
+[ -z "$SESSION_ID" ] && exit 0  # no session_id = can't track, skip silently
 
 # Configurable interval in seconds (default: 5 minutes)
 INTERVAL="${CLAUDE_CONV_INTERVAL:-300}"
 
 TIMESTAMP_DIR="$HOME/.claude/conversation_timestamps"
-TIMESTAMP_FILE="$TIMESTAMP_DIR/.conv_last_write_$PPID"
+TIMESTAMP_FILE="$TIMESTAMP_DIR/.conv_last_write_$SESSION_ID"
 
 # If timestamp file doesn't exist, create it silently as baseline.
 # This prevents firing on the very first tool call of a session.
@@ -39,5 +44,6 @@ if [ "$age" -ge "$INTERVAL" ]; then
     today=$(date +%Y-%m-%d)
     elapsed_min=$(( age / 60 ))
 
-    echo "CONVERSATION LOG DUE (${elapsed_min}m since last write): Write conversation transcript to ./conversations/${today}.md now. Append to existing content if the file exists. Follow the transcript format in CLAUDE.md — verbatim quotes, tool calls, failed approaches, state transitions. Write asynchronously (background agent or run_in_background). Do NOT block the user's work."
+    MSG="CONVERSATION LOG DUE (${elapsed_min}m since last write): Write conversation transcript to ./conversations/${today}.md now. Append to existing content if the file exists. Follow the transcript format in CLAUDE.md — verbatim quotes, tool calls, failed approaches, state transitions. Write asynchronously (background agent or run_in_background). Do NOT block the user's work."
+    printf '{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"%s"}}' "$MSG"
 fi
